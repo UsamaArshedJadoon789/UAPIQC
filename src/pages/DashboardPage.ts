@@ -49,12 +49,24 @@ export class DashboardPage {
       /support/i,
     ];
     for (const re of footerItems) {
-      await expect(
-        this.page
-          .getByRole('button', { name: re })
-          .or(this.page.getByRole('link', { name: re }))
-          .or(this.page.getByText(re))
-      ).toBeVisible();
+      // Find the first visible element among button, link, or text
+      const candidates = [
+        this.page.getByRole('button', { name: re }),
+        this.page.getByRole('link', { name: re }),
+        this.page.getByText(re)
+      ];
+      let found = false;
+      for (const c of candidates) {
+        const visible = await c.first().isVisible().catch(() => false);
+        if (visible) {
+          await expect(c.first()).toBeVisible();
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        throw new Error(`Footer item not visible: ${re}`);
+      }
     }
   }
 

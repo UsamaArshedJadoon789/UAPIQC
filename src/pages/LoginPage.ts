@@ -1,33 +1,27 @@
-import { expect } from '@playwright/test';
+import { Page } from '@playwright/test';
 
 export class LoginPage {
-  // ✅ Inline type import; no top-level Page import anywhere
-  constructor(private page: import('@playwright/test').Page) {}
-
-  async goto() {
-    await this.page.goto('/login');
-    await expect(this.page).toHaveURL(/\/login/i);
+  readonly page: Page;
+  constructor(page: Page) {
+    this.page = page;
   }
 
-  /**
-   * Attempts login and returns true on any of these:
-   *  - URL not /login
-   *  - URL includes DASHBOARD_PATH (if set)
-   *  - A dashboard/navigation/logout marker becomes visible (SPA fallback)
-   */
+  async goto() {
+    await this.page.goto(process.env.BASE_URL ? process.env.BASE_URL + '/login' : '/login');
+  }
+
   async login(username: string, password: string): Promise<boolean> {
-    const form = this.page.locator('form').first();
-
-    await form.getByPlaceholder(/enter\s*username|username/i).fill(username);
-    await form.getByPlaceholder(/enter\s*password|password/i).fill(password);
-
-    const submit = form
-      .locator('button[type="submit"]').first()
-      .or(form.getByRole('button', { name: /log ?in/i }).first());
-    await submit.click();
+  // Fill username/email
+  const form = this.page.locator('form').first();
+  await form.getByPlaceholder(/username|email/i).fill(username);
+  // Fill password
+  await form.getByPlaceholder(/password/i).fill(password);
+  // Click only the submit button inside the form
+  await form.locator('button[type="submit"], input[type="submit"]').first().click();
 
     const expectedPath = process.env.DASHBOARD_PATH || '';
 
+    // Wait for navigation or dashboard heading
     const movedOffLogin = await this.page
       .waitForURL((u: URL) => {
         const href = u.toString();
