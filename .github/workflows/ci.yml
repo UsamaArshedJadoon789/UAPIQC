@@ -1,29 +1,71 @@
-
 name: e2e
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Make these available to Playwright (process.env.*)
+    env:
+      BASE_URL: https://qc.uapi.sa
+      TEST_USERNAME: ${{ secrets.UAPIQC_USERNAME }}
+      TEST_PASSWORD: ${{ secrets.UAPIQC_PASSWORD }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+
       - name: Install deps
         run: npm ci
-      - name: Install browsers
+
+      - name: Install Playwright (browsers & deps)
         run: npx playwright install --with-deps
-      - name: Run tests
-        env:
-          BASE_URL: ${{ secrets.BASE_URL }}
-          TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
-          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-        run: npm test
+
+      - name: Run tests (Chromium)
+        run: npx playwright test --project=chromium --reporter=github,html
+
+      # Inline failure summary with first screenshot + error context
+      - name: Summarize failures
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "## Playwright Failure Summary" >> "$GITHUB_STEP_SUMMARY"
+          shopt -s globstar nullglob
+          first_png=""
+          for f in test-results/**/test-failed-*.png; do first_png="$f"; break; done
+          first_ctx=""
+          for f in test-results/**/error-context.md; do first_ctx="$f"; break; done
+          if [[ -n "${first_png}" ]]; then
+            echo "<details><summary>Failed screenshot</summary>" >> "$GITHUB_STEP_SUMMARY"
+            echo '<img alt="failed screenshot" src="data:image/png;base64,'$(base64 -w0 "${first_png}")'" />' >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "${first_ctx}" ]]; then
+            echo "<details><summary>Error context (excerpt)</summary>" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '1,200p' "${first_ctx}" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "> Full HTML report is attached as an artifact below." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
