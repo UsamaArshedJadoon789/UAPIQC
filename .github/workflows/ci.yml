@@ -10,12 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Make these available to Playwright (process.env.*)
-    env:
-      BASE_URL: https://qc.uapi.sa
-      TEST_USERNAME: ${{ secrets.UAPIQC_USERNAME }}
-      TEST_PASSWORD: ${{ secrets.UAPIQC_PASSWORD }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,41 +20,69 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright (browsers & deps)
         run: npx playwright install --with-deps
 
-      - name: Run tests (Chromium)
-        run: npx playwright test --project=chromium --reporter=github,html
-
-      # Inline failure summary with first screenshot + error context
-      - name: Summarize failures
-        if: failure()
-        shell: bash
+      # ---- Run E2E (needs secrets) ----
+      - name: Run tests
+        env:
+          # Use the hosted site, not localhost
+          BASE_URL: https://qc.uapi.sa
+          TEST_USERNAME: ${{ secrets.UAPIQC_USERNAME }}
+          TEST_PASSWORD: ${{ secrets.UAPIQC_PASSWORD }}
         run: |
-          set -euo pipefail
-          echo "## Playwright Failure Summary" >> "$GITHUB_STEP_SUMMARY"
-          shopt -s globstar nullglob
-          first_png=""
-          for f in test-results/**/test-failed-*.png; do first_png="$f"; break; done
-          first_ctx=""
-          for f in test-results/**/error-context.md; do first_ctx="$f"; break; done
-          if [[ -n "${first_png}" ]]; then
-            echo "<details><summary>Failed screenshot</summary>" >> "$GITHUB_STEP_SUMMARY"
-            echo '<img alt="failed screenshot" src="data:image/png;base64,'$(base64 -w0 "${first_png}")'" />' >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          echo "BASE_URL=$BASE_URL"
+          if [ -z "$TEST_USERNAME" ] || [ -z "$TEST_PASSWORD" ]; then
+            echo "❌ Missing TEST_USERNAME/TEST_PASSWORD secrets." >&2
+            exit 1
           fi
-          if [[ -n "${first_ctx}" ]]; then
-            echo "<details><summary>Error context (excerpt)</summary>" >> "$GITHUB_STEP_SUMMARY"
-            echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            sed -n '1,200p' "${first_ctx}" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "> Full HTML report is attached as an artifact below." >> "$GITHUB_STEP_SUMMARY"
+          # Add 'github' reporter so results surface in the job summary
+          npx playwright test --project=chromium --reporter=github,html
 
+      # ---- Inline failure summary with screenshots/videos/traces ----
+      - name: Summarize failures in GitHub Action summary
+        if: failure() || always()
+        run: |
+          echo "## Playwright Failure Summary" >> "$GITHUB_STEP_SUMMARY"
+
+          # Show failing screenshot thumbnails (limit to 10)
+          screenshots=$(ls -1 test-results/**/test-failed-*.png 2>/dev/null | head -n 10 || true)
+          if [ -n "$screenshots" ]; then
+            echo "### Screenshots" >> "$GITHUB_STEP_SUMMARY"
+            for f in $screenshots; do
+              # Markdown image paths are uploaded automatically to the summary
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "#### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+              echo "![]($f)" >> "$GITHUB_STEP_SUMMARY"
+            done
+          else
+            echo "- No failed screenshots found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Link to videos (limit to 6)
+          videos=$(ls -1 test-results/**/video.webm 2>/dev/null | head -n 6 || true)
+          if [ -n "$videos" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Videos" >> "$GITHUB_STEP_SUMMARY"
+            for v in $videos; do
+              echo "- [$(basename "$v")]($v)" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+
+          # Link to traces (limit to 6)
+          traces=$(ls -1 test-results/**/*.zip 2>/dev/null | head -n 6 || true)
+          if [ -n "$traces" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Traces" >> "$GITHUB_STEP_SUMMARY"
+            for t in $traces; do
+              echo "- [$(basename "$t")]($t)" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+
+      # ---- Upload full HTML report as an artifact ----
       - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
